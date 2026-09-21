@@ -1,6 +1,6 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { PGlite } from "@electric-sql/pglite";
+import { createTestDatabase } from "./database.js";
 import { once } from "node:events";
 import type { Server } from "node:http";
 import { createApp } from "../src/app.js";
@@ -8,11 +8,7 @@ import { migrate, type Database } from "../src/db.js";
 import { vault } from "../src/security.js";
 import { cliArgs, safeEnv, type Provider } from "../src/provider.js";
 
-const engine = new PGlite();
-const db: Database = {
-  query: (sql, params) => engine.query(sql, params),
-  close: () => engine.close(),
-};
+let db: Database;
 let server: Server;
 let base: string;
 let close: () => void;
@@ -74,6 +70,7 @@ async function register(name: string) {
   return { cookie: r.cookie, id: r.data.user.id };
 }
 before(async () => {
+  db = await createTestDatabase();
   await migrate(db);
   const built = createApp({
     db,
@@ -98,7 +95,7 @@ after(async () => {
   close();
   server.close();
   await once(server, "close");
-  await engine.close();
+  await db.close();
 });
 async function offer() {
   const r = await request(lender.cookie, "/offers", {

@@ -64,7 +64,7 @@ npm run build
 npm run test:e2e
 ```
 
-Backend tests use a fresh in-memory PostgreSQL engine and an injected test provider. They exercise approval, account isolation, encrypted credential storage, one-time redemption, expiry, exhaustion, concurrent requests, revocation while generating, unknown-usage failures, and stale leases.
+Backend access tests use a fresh in-memory PostgreSQL engine and an injected test provider. Set TEST_DATABASE_URL to run the same suite against PostgreSQL; each run creates and drops only its own randomly named test schema. CI runs both variants. CLI transport tests launch child processes to verify event parsing, bounded output, cancellation, credential refresh persistence, and temporary-file cleanup. They exercise approval, account isolation, encrypted credential storage, one-time redemption, expiry, exhaustion, concurrent requests, revocation while generating, unknown-usage failures, and stale leases.
 
 Browser tests run isolated demo servers on ports 3100/3101 with a fresh development database. They use local Chrome by default; set PLAYWRIGHT_CHANNEL=msedge for Edge, or install Chrome in CI. They verify registration, offers, approval, redemption, code output, persistent chat history, revocation, and mobile navigation. Screenshots are written to .runtime/screenshots.
 
