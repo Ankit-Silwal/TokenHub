@@ -1,0 +1,23 @@
+{
+  "name": "tokenhub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run check -w backend && npm run build -w frontend",
+    "start": "concurrently -k -n api,web \"npm run start -w backend\" \"npm run start -w frontend\"",
+    "db:migrate": "npm run db:migrate -w backend",
+    "test": "npm run test -w backend",
+    "check": "npm run check --workspaces",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "@playwright/test": "^1.58.2"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@tokenhub/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "db:migrate": "tsx src/migrate.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@openai/codex": "0.155.1",
+    "express": "^5.2.1",
+    "pg": "^8.16.3",
+    "zod": "^4.3.6",
+    "dotenv": "^17.2.3",
+    "helmet": "^8.1.0",
+    "cookie-parser": "^1.4.7",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.16.0",
+    "@types/cookie-parser": "^1.4.10",
+    "typescript": "^5.9.3",
+    "@electric-sql/pglite": "^0.3.14"
+  }
+}
