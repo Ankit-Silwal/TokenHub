@@ -66,9 +66,23 @@ npm run test:e2e
 
 Backend access tests use a fresh in-memory PostgreSQL engine and an injected test provider. Set TEST_DATABASE_URL to run the same suite against PostgreSQL; each run creates and drops only its own randomly named test schema. CI runs both variants. CLI transport tests launch child processes to verify event parsing, bounded output, cancellation, credential refresh persistence, and temporary-file cleanup. They exercise approval, account isolation, encrypted credential storage, one-time redemption, expiry, exhaustion, concurrent requests, revocation while generating, unknown-usage failures, and stale leases.
 
-Browser tests run isolated demo servers on ports 3100/3101 with a fresh development database. They use local Chrome by default; set PLAYWRIGHT_CHANNEL=msedge for Edge, or install Chrome in CI. They verify registration, offers, approval, redemption, code output, persistent chat history, revocation, and mobile navigation. Screenshots are written to .runtime/screenshots.
+Browser tests run isolated demo servers on ports 3100/3101 with a fresh development database and a separate frontend/.next-test build directory. They use local Chrome by default; set PLAYWRIGHT_CHANNEL=msedge for Edge, or install Chrome in CI. They verify registration, offers, approval, redemption, code output, persistent chat history, revocation, mobile navigation, and device sign-in cancellation/retry. Screenshots are written to .runtime/screenshots.
 
 The test suite does **not** use a real ChatGPT login or prove live Codex generation. Complete device sign-in and send a live message to verify your deployment's account access.
+
+## Optional live Codex check
+
+This check is explicit and separate from automated tests. It makes **two short real Codex requests**, so it consumes the connected lender's usage.
+
+1. Start the app in live mode (AI_PROVIDER=codex), connect your lender account, and publish a small test offer.
+2. Run `npm run test:live`. It creates a local test borrower and requests access. If several offers are available, pass the chosen offer ID: `npm run test:live -- <offer-id>`.
+3. Approve **TokenHub live test** in **My lending**. Give it enough room for Codex's input/context overhead.
+4. Run `npm run test:live` again. It redeems the account-bound code, checks two real replies and conversation context, then verifies persisted history and recorded usage.
+5. Revoke the test pass when finished.
+
+The command only targets http://localhost:3000. It refuses demo mode and stores its test session in ignored .runtime/live-check.json, never in Git or console output. It does not reuse your personal login session. A completed check will not issue more requests if run again; an interrupted request is not automatically retried because its usage may be unknown.
+
+Device sign-in can now be cancelled or retried from the connection dialog. Pending sign-ins are serialized per lender. Disconnect waits for a completing sign-in before removing credentials, and application shutdown cancels active CLI work while the database is still available for accounting and cleanup.
 
 ## Deployment boundaries
 
