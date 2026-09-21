@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
   poweredByHeader: false,
+  distDir: process.env.TOKENHUB_E2E === "true" ? ".next-test" : ".next",
   async rewrites() {
     return [
       {

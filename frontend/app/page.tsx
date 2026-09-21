@@ -1675,11 +1675,26 @@ export default function Home() {
                 Done
               </button>
             </div>
-          ) : connection.state === "failed" ? (
-            <p className="form-error">
-              Sign-in did not complete. Enable device-code login in your ChatGPT
-              security settings, then try again.
-            </p>
+          ) : ["failed", "idle"].includes(connection.state) ? (
+            <div className="form-stack">
+              <p className="form-error">
+                Sign-in did not complete or expired. Check that device-code
+                login is enabled in your ChatGPT security settings, then try
+                again.
+              </p>
+              <button
+                className="primary full-width"
+                disabled={busy}
+                onClick={() =>
+                  action(async () => {
+                    setConnection(await api("/connection", {}));
+                  })
+                }
+              >
+                Try sign-in again <ArrowRight size={16} />
+              </button>
+              {formError}
+            </div>
           ) : (
             <div className="form-stack">
               <p className="modal-description">
@@ -1707,6 +1722,20 @@ export default function Home() {
                   code…
                 </p>
               )}
+              <button
+                className="secondary full-width"
+                disabled={busy}
+                onClick={() =>
+                  action(async () => {
+                    await api("/connection/cancel", {});
+                    setConnection(null);
+                    setNotice("Sign-in cancelled.");
+                  })
+                }
+              >
+                Cancel sign-in
+              </button>
+              {formError}
               <p className="fine-print">
                 Waiting for sign-in. This updates automatically.
               </p>

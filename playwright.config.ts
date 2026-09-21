@@ -16,6 +16,7 @@ export default defineConfig({
     timeout: 60000,
     reuseExistingServer: false,
     env: {
+      TOKENHUB_E2E: "true",
       PORT: "3100",
       API_PORT: "3101",
       APP_ORIGIN: "http://localhost:3100",

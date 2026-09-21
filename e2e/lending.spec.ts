@@ -166,3 +166,51 @@ test("landing page works on desktop and mobile without horizontal overflow", asy
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toBeHidden();
 });
+
+test("device sign-in can be cancelled and retried after a server restart", async ({
+  page,
+}) => {
+  await register(
+    page,
+    "Device Tester",
+    "device-" + Date.now() + "@example.test",
+  );
+  await page.getByRole("button", { name: "My lending" }).click();
+  let loginState = "pending";
+  let cancelled = false;
+  await page.route("**/api/connection", async (route) => {
+    if (route.request().method() === "POST") loginState = "pending";
+    await route.fulfill({
+      json:
+        loginState === "pending"
+          ? {
+              state: "pending",
+              url: "https://auth.openai.com/codex/device",
+              code: "ABCD-1234",
+            }
+          : { state: loginState },
+    });
+  });
+  await page.route("**/api/connection/cancel", async (route) => {
+    cancelled = true;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.getByRole("button", { name: "Connect Codex" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("ABCD-1234")).toBeVisible();
+  await expect(
+    dialog.getByRole("link", { name: "Open OpenAI sign-in" }),
+  ).toHaveAttribute("href", "https://auth.openai.com/codex/device");
+  await dialog.getByRole("button", { name: "Cancel sign-in" }).click();
+  await expect(dialog).toBeHidden();
+  expect(cancelled).toBe(true);
+  await page.getByRole("button", { name: "Connect Codex" }).click();
+  await expect(dialog.getByText("ABCD-1234")).toBeVisible();
+  loginState = "idle";
+  await expect(
+    dialog.getByRole("button", { name: "Try sign-in again" }),
+  ).toBeVisible();
+  await dialog.getByRole("button", { name: "Try sign-in again" }).click();
+  await expect(dialog.getByText("ABCD-1234")).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel sign-in" }).click();
+});

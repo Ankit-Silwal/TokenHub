@@ -171,6 +171,10 @@ export function createApp(options: Options) {
   app.get("/api/connection", async (req, res) =>
     res.json(await connections.status(req.user.id)),
   );
+  app.post("/api/connection/cancel", async (req, res) => {
+    await connections.cancel(req.user.id);
+    res.json({ ok: true });
+  });
   app.delete("/api/connection", async (req, res) => {
     await connections.disconnect(req.user.id);
     res.json({ ok: true });
