@@ -44,6 +44,10 @@ export function createApp(options: Options) {
   const app = express();
   app.disable("x-powered-by");
   app.use(helmet());
+  app.use("/api", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
   app.use(express.json({ limit: "64kb" }), cookieParser());
   app.use((req, _res, next) => {
     if (
@@ -598,18 +602,16 @@ export function createApp(options: Options) {
             ? 400
             : 500;
     if (status === 500) console.error("API error:", error.code || error.name);
-    res
-      .status(status)
-      .json({
-        error:
-          status === 500
-            ? "Something went wrong. Please try again."
-            : status === 413
-              ? "Message too large."
-              : status === 400 && !(error instanceof HttpError)
-                ? "Invalid JSON."
-                : error.message,
-      });
+    res.status(status).json({
+      error:
+        status === 500
+          ? "Something went wrong. Please try again."
+          : status === 413
+            ? "Message too large."
+            : status === 400 && !(error instanceof HttpError)
+              ? "Invalid JSON."
+              : error.message,
+    });
   });
   return { app, close: () => connections.close() };
 }

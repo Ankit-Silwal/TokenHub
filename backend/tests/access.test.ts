@@ -496,28 +496,57 @@ test("CLI arguments disable agent capabilities and environment omits application
 
 test("expiry cancels an in-flight response before releasing its output", async () => {
   const g = await active();
-  await db.query("UPDATE grants SET expires_at=now()+interval '150 milliseconds' WHERE id=$1", [g.grantId]);
+  await db.query(
+    "UPDATE grants SET expires_at=now()+interval '150 milliseconds' WHERE id=$1",
+    [g.grantId],
+  );
   mode = "slow";
-  const result = await request(borrower.cookie, "/conversations/"+g.conversationId+"/messages", {content:"expires during generation"});
+  const result = await request(
+    borrower.cookie,
+    "/conversations/" + g.conversationId + "/messages",
+    { content: "expires during generation" },
+  );
   mode = "normal";
   assert.equal(result.status, 502);
-  const history = await request(borrower.cookie, "/conversations/"+g.conversationId+"/messages");
-  assert.equal(history.data.filter((m:any)=>m.role==="assistant").length, 0);
+  const history = await request(
+    borrower.cookie,
+    "/conversations/" + g.conversationId + "/messages",
+  );
+  assert.equal(
+    history.data.filter((m: any) => m.role === "assistant").length,
+    0,
+  );
 });
 test("parallel messages on the same pass admit only one provider turn", async () => {
   const g = await active();
-  mode = "slow"; const before = calls;
+  mode = "slow";
+  const before = calls;
   const results = await Promise.all([
-    request(borrower.cookie, "/conversations/"+g.conversationId+"/messages", {content:"one"}),
-    request(borrower.cookie, "/conversations/"+g.conversationId+"/messages", {content:"two"}),
+    request(
+      borrower.cookie,
+      "/conversations/" + g.conversationId + "/messages",
+      { content: "one" },
+    ),
+    request(
+      borrower.cookie,
+      "/conversations/" + g.conversationId + "/messages",
+      { content: "two" },
+    ),
   ]);
   mode = "normal";
-  assert.deepEqual(results.map(r=>r.status).sort(), [200,409]);
-  assert.equal(calls, before+1);
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+  assert.equal(calls, before + 1);
 });
 test("redemption attempts are rate limited across requests", async () => {
-  for (let i=0;i<10;i++) assert.equal((await request(stranger.cookie,"/redeem",{code:"invalid"})).status,400);
-  assert.equal((await request(stranger.cookie,"/redeem",{code:"invalid"})).status,429);
+  for (let i = 0; i < 10; i++)
+    assert.equal(
+      (await request(stranger.cookie, "/redeem", { code: "invalid" })).status,
+      400,
+    );
+  assert.equal(
+    (await request(stranger.cookie, "/redeem", { code: "invalid" })).status,
+    429,
+  );
 });
 
 test("disconnect revokes all access and removes stored credentials", async () => {
