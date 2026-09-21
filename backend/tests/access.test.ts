@@ -568,3 +568,41 @@ test("disconnect revokes all access and removes stored credentials", async () =>
     0,
   );
 });
+
+test("application shutdown cancels active generation before closing the database", async () => {
+  await request(lender.cookie, "/connection", {});
+  const grant = await active();
+  mode = "slow";
+  const started = new Promise<void>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const response = request(
+    borrower.cookie,
+    "/conversations/" + grant.conversationId + "/messages",
+    { content: "work during restart" },
+  );
+  await started;
+  resolveStarted = () => {};
+  await close();
+  const result = await response;
+  mode = "normal";
+  assert.equal(result.status, 502);
+  const row = (
+    await db.query(
+      "SELECT busy_id,used_tokens,token_limit FROM grants WHERE id=$1",
+      [grant.grantId],
+    )
+  ).rows[0];
+  assert.equal(row.busy_id, null);
+  assert.equal(row.used_tokens, row.token_limit);
+  assert.equal(
+    (
+      await request(
+        borrower.cookie,
+        "/conversations/" + grant.conversationId + "/messages",
+        { content: "after restart" },
+      )
+    ).status,
+    503,
+  );
+});

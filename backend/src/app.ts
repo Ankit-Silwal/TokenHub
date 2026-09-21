@@ -18,6 +18,7 @@ import {
 import type { Provider } from "./provider.js";
 import { Connections } from "./connections.js";
 import { HttpError, requireValue } from "./errors.js";
+import { ActiveTurns } from "./active-turns.js";
 
 declare global {
   namespace Express {
@@ -42,6 +43,7 @@ export function createApp(options: Options) {
   const { db, provider, origin, demo, production = false } = options;
   const crypto = vault(options.encryptionKey);
   const connections = new Connections(db, crypto, demo);
+  const turns = new ActiveTurns();
   const app = express();
   app.disable("x-powered-by");
   app.use(helmet());
@@ -398,183 +400,186 @@ export function createApp(options: Options) {
       ).rows,
     );
   });
-  app.post("/api/conversations/:id/messages", async (req, res) => {
-    const conversationId = uuid.parse(req.params.id);
-    const { content } = z.object({ content: text(12000) }).parse(req.body);
-    await limit("chat:" + req.user.id, 30, 60);
-    const conversation = requireValue(
-      (
-        await db.query(
-          "SELECT * FROM conversations WHERE id=$1 AND user_id=$2",
-          [conversationId, req.user.id],
-        )
-      ).rows[0],
-    );
-    await db.query(
-      "UPDATE grants SET used_tokens=GREATEST(used_tokens,token_limit),busy_id=NULL,busy_until=NULL WHERE id=$1 AND busy_id IS NOT NULL AND busy_until<=now()",
-      [conversation.grant_id],
-    );
-    const runId = randomUUID();
-    const grant = (
-      await db.query(
-        "UPDATE grants SET busy_id=$3,busy_until=now()+interval '3 minutes' WHERE id=$1 AND borrower_id=$2 AND status='active' AND expires_at>now() AND used_tokens<token_limit AND busy_id IS NULL RETURNING *",
-        [conversation.grant_id, req.user.id, runId],
-      )
-    ).rows[0];
-    if (!grant)
-      throw new HttpError(
-        409,
-        "This access pass is expired, revoked, out of tokens, or already generating a response.",
+  app.post("/api/conversations/:id/messages", (req, res) =>
+    turns.run(async (controller) => {
+      const conversationId = uuid.parse(req.params.id);
+      const { content } = z.object({ content: text(12000) }).parse(req.body);
+      await limit("chat:" + req.user.id, 30, 60);
+      const conversation = requireValue(
+        (
+          await db.query(
+            "SELECT * FROM conversations WHERE id=$1 AND user_id=$2",
+            [conversationId, req.user.id],
+          )
+        ).rows[0],
       );
-    let started = false;
-    let settled = false;
-    let lenderId: string | undefined;
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    res.on("close", cancel);
-    const timeout = setTimeout(
-      cancel,
-      Math.min(
-        120000,
-        Math.max(1, new Date(grant.expires_at).getTime() - Date.now()),
-      ),
-    );
-    let checking = false;
-    const monitor = setInterval(async () => {
-      if (checking) return;
-      checking = true;
+      await db.query(
+        "UPDATE grants SET used_tokens=GREATEST(used_tokens,token_limit),busy_id=NULL,busy_until=NULL WHERE id=$1 AND busy_id IS NOT NULL AND busy_until<=now()",
+        [conversation.grant_id],
+      );
+      const runId = randomUUID();
+      const grant = (
+        await db.query(
+          "UPDATE grants SET busy_id=$3,busy_until=now()+interval '3 minutes' WHERE id=$1 AND borrower_id=$2 AND status='active' AND expires_at>now() AND used_tokens<token_limit AND busy_id IS NULL RETURNING *",
+          [conversation.grant_id, req.user.id, runId],
+        )
+      ).rows[0];
+      if (!grant)
+        throw new HttpError(
+          409,
+          "This access pass is expired, revoked, out of tokens, or already generating a response.",
+        );
+      let started = false;
+      let settled = false;
+      let lenderId: string | undefined;
+
+      const cancel = () => controller.abort();
+      res.on("close", cancel);
+      const timeout = setTimeout(
+        cancel,
+        Math.min(
+          120000,
+          Math.max(1, new Date(grant.expires_at).getTime() - Date.now()),
+        ),
+      );
+      let checking = false;
+      const monitor = setInterval(async () => {
+        if (checking) return;
+        checking = true;
+        try {
+          const active = (
+            await db.query(
+              "SELECT 1 FROM grants WHERE id=$1 AND status='active' AND expires_at>now()",
+              [grant.id],
+            )
+          ).rows.length;
+          if (!active) controller.abort();
+        } catch {
+          controller.abort();
+        } finally {
+          checking = false;
+        }
+      }, 500);
       try {
-        const active = (
+        const offer = requireValue(
+          (
+            await db.query("SELECT lender_id FROM offers WHERE id=$1", [
+              grant.offer_id,
+            ])
+          ).rows[0],
+        );
+        lenderId = offer.lender_id;
+        const connection = (
+          await db.query(
+            "UPDATE connections SET busy_id=$2,busy_until=now()+interval '3 minutes' WHERE user_id=$1 AND (busy_id IS NULL OR busy_until<now()) RETURNING credential",
+            [lenderId, runId],
+          )
+        ).rows[0];
+        if (!connection)
+          throw new HttpError(
+            409,
+            "The lender is disconnected or processing another response. Try again shortly.",
+          );
+        const history = (
+          await db.query(
+            "SELECT role,content FROM messages WHERE conversation_id=$1 ORDER BY created_at,id",
+            [conversationId],
+          )
+        ).rows;
+        if (JSON.stringify(history).length + content.length > 48000)
+          throw new HttpError(
+            400,
+            "This conversation is full. Start a new chat to continue.",
+          );
+        await db.query(
+          "INSERT INTO usage_events(id,grant_id,conversation_id,status) VALUES($1,$2,$3,'running')",
+          [runId, grant.id, conversationId],
+        );
+        await db.query(
+          "INSERT INTO messages(id,conversation_id,role,content) VALUES($1,$2,$3,$4)",
+          [randomUUID(), conversationId, "user", content],
+        );
+        if (!history.length)
+          await db.query("UPDATE conversations SET title=$2 WHERE id=$1", [
+            conversationId,
+            content.slice(0, 60),
+          ]);
+        controller.signal.throwIfAborted();
+        started = true;
+        const reply = await provider.run(
+          crypto.decrypt(connection.credential),
+          [...history, { role: "user", content }],
+          controller.signal,
+          async (credential) => {
+            await db.query(
+              "UPDATE connections SET credential=$2,updated_at=now() WHERE user_id=$1 AND busy_id=$3",
+              [lenderId, crypto.encrypt(credential), runId],
+            );
+          },
+        );
+        await db.query(
+          "UPDATE grants SET used_tokens=used_tokens+$2 WHERE id=$1 AND busy_id=$3",
+          [grant.id, reply.tokens, runId],
+        );
+        settled = true;
+        await db.query(
+          "UPDATE usage_events SET tokens=$2,status='completed' WHERE id=$1",
+          [runId, reply.tokens],
+        );
+        const stillActive = (
           await db.query(
             "SELECT 1 FROM grants WHERE id=$1 AND status='active' AND expires_at>now()",
             [grant.id],
           )
         ).rows.length;
-        if (!active) controller.abort();
-      } catch {
-        controller.abort();
-      } finally {
-        checking = false;
-      }
-    }, 500);
-    try {
-      const offer = requireValue(
-        (
-          await db.query("SELECT lender_id FROM offers WHERE id=$1", [
-            grant.offer_id,
-          ])
-        ).rows[0],
-      );
-      lenderId = offer.lender_id;
-      const connection = (
-        await db.query(
-          "UPDATE connections SET busy_id=$2,busy_until=now()+interval '3 minutes' WHERE user_id=$1 AND (busy_id IS NULL OR busy_until<now()) RETURNING credential",
-          [lenderId, runId],
-        )
-      ).rows[0];
-      if (!connection)
-        throw new HttpError(
-          409,
-          "The lender is disconnected or processing another response. Try again shortly.",
-        );
-      const history = (
-        await db.query(
-          "SELECT role,content FROM messages WHERE conversation_id=$1 ORDER BY created_at,id",
-          [conversationId],
-        )
-      ).rows;
-      if (JSON.stringify(history).length + content.length > 48000)
-        throw new HttpError(
-          400,
-          "This conversation is full. Start a new chat to continue.",
-        );
-      await db.query(
-        "INSERT INTO usage_events(id,grant_id,conversation_id,status) VALUES($1,$2,$3,'running')",
-        [runId, grant.id, conversationId],
-      );
-      await db.query(
-        "INSERT INTO messages(id,conversation_id,role,content) VALUES($1,$2,$3,$4)",
-        [randomUUID(), conversationId, "user", content],
-      );
-      if (!history.length)
-        await db.query("UPDATE conversations SET title=$2 WHERE id=$1", [
-          conversationId,
-          content.slice(0, 60),
-        ]);
-      controller.signal.throwIfAborted();
-      started = true;
-      const reply = await provider.run(
-        crypto.decrypt(connection.credential),
-        [...history, { role: "user", content }],
-        controller.signal,
-        async (credential) => {
-          await db.query(
-            "UPDATE connections SET credential=$2,updated_at=now() WHERE user_id=$1 AND busy_id=$3",
-            [lenderId, crypto.encrypt(credential), runId],
+        if (!stillActive || controller.signal.aborted)
+          throw new HttpError(
+            409,
+            "Access ended before this response completed.",
           );
-        },
-      );
-      await db.query(
-        "UPDATE grants SET used_tokens=used_tokens+$2 WHERE id=$1 AND busy_id=$3",
-        [grant.id, reply.tokens, runId],
-      );
-      settled = true;
-      await db.query(
-        "UPDATE usage_events SET tokens=$2,status='completed' WHERE id=$1",
-        [runId, reply.tokens],
-      );
-      const stillActive = (
+        const id = randomUUID();
         await db.query(
-          "SELECT 1 FROM grants WHERE id=$1 AND status='active' AND expires_at>now()",
-          [grant.id],
-        )
-      ).rows.length;
-      if (!stillActive || controller.signal.aborted)
-        throw new HttpError(
-          409,
-          "Access ended before this response completed.",
+          "INSERT INTO messages(id,conversation_id,role,content,tokens) VALUES($1,$2,$3,$4,$5)",
+          [id, conversationId, "assistant", reply.text, reply.tokens],
         );
-      const id = randomUUID();
-      await db.query(
-        "INSERT INTO messages(id,conversation_id,role,content,tokens) VALUES($1,$2,$3,$4,$5)",
-        [id, conversationId, "assistant", reply.text, reply.tokens],
-      );
-      res.json({
-        id,
-        role: "assistant",
-        content: reply.text,
-        tokens: reply.tokens,
-      });
-    } catch (e) {
-      if (started && !settled) {
+        res.json({
+          id,
+          role: "assistant",
+          content: reply.text,
+          tokens: reply.tokens,
+        });
+      } catch (e) {
+        if (started && !settled) {
+          await db.query(
+            "UPDATE grants SET used_tokens=GREATEST(used_tokens,token_limit) WHERE id=$1 AND busy_id=$2",
+            [grant.id, runId],
+          );
+          await db.query(
+            "UPDATE usage_events SET status='failed' WHERE id=$1",
+            [runId],
+          );
+          throw new HttpError(
+            502,
+            "Response interrupted or Codex unavailable. Usage could not be confirmed, so this pass is locked to protect the lender. Request a new pass.",
+          );
+        }
+        throw e;
+      } finally {
+        clearTimeout(timeout);
+        clearInterval(monitor);
+        res.off("close", cancel);
         await db.query(
-          "UPDATE grants SET used_tokens=GREATEST(used_tokens,token_limit) WHERE id=$1 AND busy_id=$2",
+          "UPDATE grants SET busy_id=NULL,busy_until=NULL WHERE id=$1 AND busy_id=$2",
           [grant.id, runId],
         );
-        await db.query("UPDATE usage_events SET status='failed' WHERE id=$1", [
-          runId,
-        ]);
-        throw new HttpError(
-          502,
-          "Response interrupted or Codex unavailable. Usage could not be confirmed, so this pass is locked to protect the lender. Request a new pass.",
-        );
+        if (lenderId)
+          await db.query(
+            "UPDATE connections SET busy_id=NULL,busy_until=NULL WHERE user_id=$1 AND busy_id=$2",
+            [lenderId, runId],
+          );
       }
-      throw e;
-    } finally {
-      clearTimeout(timeout);
-      clearInterval(monitor);
-      res.off("close", cancel);
-      await db.query(
-        "UPDATE grants SET busy_id=NULL,busy_until=NULL WHERE id=$1 AND busy_id=$2",
-        [grant.id, runId],
-      );
-      if (lenderId)
-        await db.query(
-          "UPDATE connections SET busy_id=NULL,busy_until=NULL WHERE user_id=$1 AND busy_id=$2",
-          [lenderId, runId],
-        );
-    }
-  });
+    }),
+  );
   app.use("/api", (_req, _res, next) =>
     next(new HttpError(404, "Endpoint not found.")),
   );
@@ -606,5 +611,10 @@ export function createApp(options: Options) {
               : error.message,
     });
   });
-  return { app, close: () => connections.close() };
+  return {
+    app,
+    close: async () => {
+      await Promise.all([turns.close(), connections.close()]);
+    },
+  };
 }

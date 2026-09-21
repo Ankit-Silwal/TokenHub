@@ -24,9 +24,15 @@ const server = app.listen(
         (process.env.API_PORT || 3001),
     ),
 );
+let stopping = false;
 async function shutdown() {
+  if (stopping) return;
+  stopping = true;
+  const stopped = new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   await close();
-  server.close();
+  await stopped;
   await db.close();
   process.exit(0);
 }
