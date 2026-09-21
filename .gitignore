@@ -9,3 +9,4 @@ dist/
 test-results/
 playwright-report/
 *.log
+next-env.d.ts
