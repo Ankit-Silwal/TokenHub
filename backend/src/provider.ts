@@ -3,7 +3,7 @@ import { codexBinary } from "./binary.js";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { collectTurn } from "./cli-turn.js";
 import type { Database } from "./db.js";
 import { vault } from "./security.js";
 
@@ -107,88 +107,36 @@ function startCli(args: string[], home: string, cwd: string) {
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
-export const codexProvider: Provider = {
-  async run(credential, messages, signal, saveCredential) {
-    const home = await mkdtemp(join(tmpdir(), "tokenhub-run-"));
-    let child: ChildProcess | undefined;
-    try {
-      await mkdir(join(home, "work"));
-      await writeFile(join(home, "auth.json"), credential, { mode: 0o600 });
-      signal.throwIfAborted();
-      child = startCli(cliArgs(), home, join(home, "work"));
-      const activeChild = child;
-      const cancel = () => activeChild.kill();
-      signal.addEventListener("abort", cancel, { once: true });
-      const outcome = await new Promise<Reply>((resolve, reject) => {
-        let text = "";
-        let tokens: number | undefined;
-        let failure = false;
-        let bytes = 0;
-        const lines = createInterface({ input: activeChild.stdout! });
-        activeChild.stderr!.on("data", () => {}); // Never expose CLI diagnostics or credentials to a borrower.
-        lines.on("line", (line) => {
-          bytes += Buffer.byteLength(line);
-          if (bytes > 2_000_000) {
-            failure = true;
-            activeChild.kill();
-            return;
-          }
-          try {
-            const event = JSON.parse(line);
-            if (event.type === "turn.failed" || event.type === "error")
-              failure = true;
-            const item = event.item;
-            if (item && !["agent_message", "reasoning"].includes(item.type)) {
-              failure = true;
-              activeChild.kill(); // Fail closed if the CLI attempts an agent action.
-            }
-            if (
-              event.type === "item.completed" &&
-              item?.type === "agent_message"
-            )
-              text += item.text;
-            if (event.type === "turn.completed") {
-              const input = event.usage?.input_tokens;
-              const output = event.usage?.output_tokens;
-              if (
-                Number.isSafeInteger(input) &&
-                input >= 0 &&
-                Number.isSafeInteger(output) &&
-                output >= 0
-              )
-                tokens = input + output;
-            }
-          } catch {
-            failure = true;
-            activeChild.kill();
-          }
-        });
-        activeChild.once("error", reject);
-        activeChild.once("close", (code) => {
-          signal.removeEventListener("abort", cancel);
-          if (signal.aborted) reject(new Error("Response cancelled."));
-          else if (code !== 0 || failure || tokens === undefined || !text)
-            reject(
-              new Error(
-                "Codex could not complete this response. Ask the lender to check their connection.",
-              ),
-            );
-          else resolve({ text, tokens });
-        });
-        activeChild.stdin!.on("error", () => {});
-        activeChild.stdin!.end(JSON.stringify(messages));
-      });
-      return outcome;
-    } finally {
-      // Codex can rotate OAuth refresh tokens even if a request fails.
+export function createCodexProvider(
+  start: typeof startCli = startCli,
+): Provider {
+  return {
+    async run(credential, messages, signal, saveCredential) {
+      const home = await mkdtemp(join(tmpdir(), "tokenhub-run-"));
+      let child: ChildProcess | undefined;
       try {
-        await saveCredential(await readFile(join(home, "auth.json"), "utf8"));
+        await mkdir(join(home, "work"));
+        await writeFile(join(home, "auth.json"), credential, { mode: 0o600 });
+        signal.throwIfAborted();
+        child = start(cliArgs(), home, join(home, "work"));
+        const outcome = await collectTurn(
+          child,
+          JSON.stringify(messages),
+          signal,
+        );
+        return outcome;
       } finally {
-        await rm(home, { recursive: true, force: true });
+        // Codex can rotate OAuth refresh tokens even if a request fails.
+        try {
+          await saveCredential(await readFile(join(home, "auth.json"), "utf8"));
+        } finally {
+          await rm(home, { recursive: true, force: true });
+        }
       }
-    }
-  },
-};
+    },
+  };
+}
+export const codexProvider = createCodexProvider();
 export const demoProvider: Provider = {
   async run(_credential, messages, signal) {
     await new Promise<void>((resolve, reject) => {
