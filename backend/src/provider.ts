@@ -4,8 +4,6 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectTurn } from "./cli-turn.js";
-import type { Database } from "./db.js";
-import { vault } from "./security.js";
 
 export type ChatMessage = { role: string; content: string };
 export type Reply = { text: string; tokens: number };
@@ -99,7 +97,7 @@ export function safeEnv(home: string): NodeJS.ProcessEnv {
     if (process.env[key]) env[key] = process.env[key];
   return env;
 }
-function startCli(args: string[], home: string, cwd: string) {
+export function startCli(args: string[], home: string, cwd: string) {
   return spawn(codexBinary(), args, {
     cwd,
     env: safeEnv(home),
@@ -161,105 +159,3 @@ export const demoProvider: Provider = {
     };
   },
 };
-type Login = {
-  state: "starting" | "pending" | "connected" | "failed";
-  url?: string;
-  code?: string;
-  expires: number;
-  child?: ChildProcess;
-  cancelled?: boolean;
-};
-export class Connections {
-  private logins = new Map<string, Login>();
-  constructor(
-    private db: Database,
-    private crypto: ReturnType<typeof vault>,
-    private demo: boolean,
-  ) {}
-  async begin(userId: string) {
-    const existing = this.logins.get(userId);
-    if (
-      existing &&
-      existing.expires > Date.now() &&
-      ["starting", "pending"].includes(existing.state)
-    )
-      return this.status(userId);
-    if (this.demo) {
-      await this.save(userId, '{"demo":true}');
-      return { state: "connected" };
-    }
-    const login: Login = {
-      state: "starting",
-      expires: Date.now() + 10 * 60_000,
-    };
-    this.logins.set(userId, login);
-    const home = await mkdtemp(join(tmpdir(), "tokenhub-login-"));
-    await writeFile(
-      join(home, "config.toml"),
-      'cli_auth_credentials_store = "file"\n',
-      { mode: 0o600 },
-    );
-    const child = startCli(["login", "--device-auth"], home, home);
-    login.child = child;
-    const timer = setTimeout(() => {
-      login.state = "failed";
-      child.kill();
-    }, 10 * 60_000);
-    let output = "";
-    const parse = (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-8192);
-      const text = output.replace(/\u001b\[[0-9;]*m/g, "");
-      const url = text.match(/https:\/\/auth\.openai\.com\/[a-zA-Z0-9/?=_-]+/);
-      const code = text.match(/\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b/);
-      if (url) login.url = url[0];
-      if (code) login.code = code[0];
-      if (login.url && login.code) login.state = "pending";
-    };
-    child.stdout!.on("data", parse);
-    child.stderr!.on("data", parse);
-    child.on("error", () => {
-      login.state = "failed";
-    });
-    child.on("close", async (code) => {
-      clearTimeout(timer);
-      try {
-        if (code !== 0 || login.cancelled) throw new Error("login failed");
-        const auth = await readFile(join(home, "auth.json"), "utf8");
-        const value = JSON.parse(auth);
-        if (!value.tokens) throw new Error("ChatGPT sign-in required");
-        if (login.cancelled) throw new Error("login cancelled");
-        await this.save(userId, auth);
-        login.state = "connected";
-      } catch {
-        login.state = "failed";
-      } finally {
-        await rm(home, { recursive: true, force: true });
-        login.child = undefined;
-      }
-    });
-    return this.status(userId);
-  }
-  async save(userId: string, auth: string) {
-    await this.db.query(
-      "INSERT INTO connections(user_id,credential) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET credential=$2,updated_at=now()",
-      [userId, this.crypto.encrypt(auth)],
-    );
-  }
-  status(userId: string) {
-    const login = this.logins.get(userId);
-    return login
-      ? { state: login.state, url: login.url, code: login.code }
-      : { state: "idle" };
-  }
-  cancel(userId: string) {
-    const login = this.logins.get(userId);
-    if (login) {
-      login.cancelled = true;
-      login.state = "failed";
-      login.child?.kill();
-    }
-  }
-  close() {
-    for (const userId of this.logins.keys()) this.cancel(userId);
-  }
-}

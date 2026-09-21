@@ -15,7 +15,8 @@ import {
   passwordMatches,
   vault,
 } from "./security.js";
-import { Connections, type Provider } from "./provider.js";
+import type { Provider } from "./provider.js";
+import { Connections } from "./connections.js";
 import { HttpError, requireValue } from "./errors.js";
 
 declare global {
@@ -166,18 +167,10 @@ export function createApp(options: Options) {
     res.json(await connections.begin(req.user.id));
   });
   app.get("/api/connection", async (req, res) =>
-    res.json(connections.status(req.user.id)),
+    res.json(await connections.status(req.user.id)),
   );
   app.delete("/api/connection", async (req, res) => {
-    connections.cancel(req.user.id);
-    await db.query(
-      "UPDATE grants SET status=$2,code_hash=NULL,code_cipher=NULL WHERE offer_id IN (SELECT id FROM offers WHERE lender_id=$1) AND status IN ($3,$4,$5)",
-      [req.user.id, "revoked", "active", "approved", "pending"],
-    );
-    await db.query("UPDATE offers SET active=false WHERE lender_id=$1", [
-      req.user.id,
-    ]);
-    await db.query("DELETE FROM connections WHERE user_id=$1", [req.user.id]);
+    await connections.disconnect(req.user.id);
     res.json({ ok: true });
   });
   app.get("/api/offers", async (req, res) => {

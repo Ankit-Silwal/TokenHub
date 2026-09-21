@@ -11,7 +11,7 @@ import { cliArgs, safeEnv, type Provider } from "../src/provider.js";
 let db: Database;
 let server: Server;
 let base: string;
-let close: () => void;
+let close: () => Promise<void>;
 let calls = 0;
 let mode: "normal" | "slow" | "fail" = "normal";
 let resolveStarted: () => void = () => {};
@@ -92,7 +92,7 @@ beforeEach(async () => {
   await db.query("DELETE FROM rate_limits");
 });
 after(async () => {
-  close();
+  await close();
   server.close();
   await once(server, "close");
   await db.close();

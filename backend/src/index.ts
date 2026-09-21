@@ -25,7 +25,7 @@ const server = app.listen(
     ),
 );
 async function shutdown() {
-  close();
+  await close();
   server.close();
   await db.close();
   process.exit(0);
