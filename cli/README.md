@@ -5,7 +5,7 @@ An installable terminal client for TokenHub borrowers. Requires Node.js 22.12 or
 Install from the repository:
 
 ```sh
-npm install -g github:Ankit-Silwal/TokenHub
+npm install -g https://github.com/Ankit-Silwal/TokenHub/archive/refs/heads/main.tar.gz
 tokenhub login --server https://your-tokenhub-server.example --email you@example.com
 tokenhub offers
 tokenhub request <offer-id> "Help with my project"
@@ -16,6 +16,8 @@ tokenhub
 ```
 
 For a local server, use `http://localhost:3000`. Register your TokenHub account in the web app first. The password prompt is hidden; passwords are never saved. Automated environments may supply `TOKENHUB_PASSWORD` for login. Sessions expire after seven days; `tokenhub logout` revokes the current CLI session.
+
+Use the archive URL above for installation and updates. With this workspace repository, npm's `github:Ankit-Silwal/TokenHub` shorthand can leave a broken link to a temporary checkout on Windows. The archive installs a persistent package and needs no Git executable.
 
 Run `tokenhub` in your project directory to open the coding agent. It can list/read project files, propose file writes or exact text replacements, and run commands. Every write and command shows a preview and requires an explicit `y` or `yes`; noninteractive sessions deny these operations. Reads happen automatically, and file contents/tool results are sent to the TokenHub server and stored in your conversation. Use `tokenhub chat` for conversation without local tools.
 

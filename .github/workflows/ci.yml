@@ -68,3 +68,9 @@ jobs:
         with:
           node-version: 22
       - run: node --test cli/tests/*.test.mjs
+      - name: Verify repository archive installation
+        shell: bash
+        run: |
+          git archive --format=tar.gz --prefix=package/ --output=tokenhub-source.tgz HEAD
+          npm install --global --prefix "$RUNNER_TEMP/tokenhub-source" ./tokenhub-source.tgz
+          node "$(npm root --global --prefix "$RUNNER_TEMP/tokenhub-source")/tokenhub/cli/bin/tokenhub.mjs" --version

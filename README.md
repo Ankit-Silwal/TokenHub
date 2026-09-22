@@ -14,7 +14,7 @@ Redis is unnecessary here: PostgreSQL stores sessions, rate limits, grants, and 
 ## Install the terminal client
 
 ```sh
-npm install -g github:Ankit-Silwal/TokenHub
+npm install -g https://github.com/Ankit-Silwal/TokenHub/archive/refs/heads/main.tar.gz
 tokenhub login --server https://your-tokenhub-server.example
 tokenhub passes
 tokenhub redeem <approved-pass-id>
