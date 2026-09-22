@@ -11,6 +11,19 @@ A permission-based AI lending app with a Next.js frontend, a Node.js/TypeScript 
 
 Redis is unnecessary here: PostgreSQL stores sessions, rate limits, grants, and atomic request leases.
 
+## Install the terminal client
+
+```sh
+npm install -g github:Ankit-Silwal/TokenHub
+tokenhub login --server https://your-tokenhub-server.example
+tokenhub passes
+tokenhub redeem <approved-pass-id>
+tokenhub status
+tokenhub chat
+```
+
+The CLI uses your TokenHub account and the same pass allowance as the website. Use `http://localhost:3000` for local development. `tokenhub usage --json` exposes usage events and remaining tokens; `tokenhub --help` lists access requests, pass selection, and conversation commands. See [the CLI guide](cli/README.md) for installation, session storage, and packaging. The CLI is installable from GitHub; it is not published on npm yet.
+
 ## Start locally
 
 Use Node.js 22.12 or newer.

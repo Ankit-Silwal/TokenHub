@@ -2,21 +2,25 @@
   "name": "tokenhub",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "tokenhub": "cli/bin/tokenhub.mjs"
+  },
   "type": "module",
   "workspaces": [
     "backend",
-    "frontend"
+    "frontend",
+    "cli"
   ],
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "build": "npm run check -w backend && npm run build -w frontend",
     "start": "concurrently -k -n api,web \"npm run start -w backend\" \"npm run start -w frontend\"",
     "db:migrate": "npm run db:migrate -w backend",
-    "test": "npm run test -w backend",
+    "test": "npm run test -w backend && npm run test -w cli",
     "check": "npm run check --workspaces",
     "test:e2e": "playwright test",
-    "format": "prettier --write backend/src backend/tests frontend/app frontend/next.config.ts scripts e2e playwright.config.ts README.md",
-    "format:check": "prettier --check backend/src backend/tests frontend/app frontend/next.config.ts scripts e2e playwright.config.ts README.md",
+    "format": "prettier --write backend/src backend/tests cli frontend/app frontend/next.config.ts scripts e2e playwright.config.ts README.md",
+    "format:check": "prettier --check backend/src backend/tests cli frontend/app frontend/next.config.ts scripts e2e playwright.config.ts README.md",
     "test:live": "node scripts/live-check.mjs"
   },
   "devDependencies": {

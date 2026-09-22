@@ -1,0 +1,22 @@
+{
+  "name": "tokenhub-cli",
+  "version": "0.2.0",
+  "description": "TokenHub terminal agent with borrower access and token usage",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "tokenhub": "bin/tokenhub.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check bin/tokenhub.mjs && node --check src/client.mjs && node --check src/main.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

@@ -136,6 +136,80 @@ async function active(limit = 1000) {
   assert.equal(c.status, 201);
   return { ...g, conversationId: c.data.id };
 }
+
+test("CLI sessions are scoped, account-bound, revocable and share token accounting", async () => {
+  const g = await active(200);
+  const login = await fetch(base + "/cli/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "borrower@example.com",
+      password: "A-safe-password-123",
+    }),
+  });
+  assert.equal(login.status, 200);
+  assert.equal(login.headers.get("set-cookie"), null);
+  const credentials = await login.json();
+  assert.equal(
+    (
+      await db.query("SELECT hash FROM cli_sessions WHERE user_id=$1", [
+        borrower.id,
+      ])
+    ).rows.some((r) => r.hash === credentials.token),
+    false,
+  );
+  const cli = async (
+    path: string,
+    body?: unknown,
+    token = credentials.token,
+  ) => {
+    const r = await fetch(base + path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: r.status, data: await r.json() };
+  };
+  assert.equal((await cli("/connection", {})).status, 403);
+  assert.equal((await cli("/lending")).status, 403);
+  assert.equal(
+    (await request("tokenhub_session=" + credentials.token, "/me")).status,
+    401,
+  );
+  assert.equal(
+    (await cli("/me", undefined, borrower.cookie.split("=")[1])).status,
+    401,
+  );
+  const reply = await cli(`/conversations/${g.conversationId}/messages`, {
+    content: "CLI test",
+  });
+  assert.equal(reply.status, 200);
+  const usage = (await cli("/cli/usage")).data;
+  assert.ok(
+    usage.grants.every((grant: any) => grant.borrower_id === borrower.id),
+  );
+  const used = usage.grants.find((grant: any) => grant.id === g.grantId);
+  assert.equal(used.remaining_tokens, 0);
+  assert.equal(used.effective_status, "exhausted");
+  assert.ok(
+    usage.events.some(
+      (event: any) => event.grant_id === g.grantId && event.tokens === 200,
+    ),
+  );
+  assert.equal(
+    (
+      await cli(`/conversations/${g.conversationId}/messages`, {
+        content: "blocked",
+      })
+    ).status,
+    409,
+  );
+  assert.equal((await cli("/cli/logout", {})).status, 200);
+  assert.equal((await cli("/me")).status, 401);
+});
 test("authentication rejects wrong credentials and cross-origin writes", async () => {
   assert.equal((await request("", "/me")).status, 401);
   assert.equal(

@@ -24,6 +24,7 @@ declare global {
   namespace Express {
     interface Request {
       user: { id: string; name: string; email: string };
+      cliToken?: string;
     }
   }
 }
@@ -55,7 +56,12 @@ export function createApp(options: Options) {
   app.use((req, _res, next) => {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
-      req.headers.origin !== origin
+      req.headers.origin !== origin &&
+      !(
+        !req.headers.origin &&
+        (req.path === "/api/cli/login" ||
+          req.headers.authorization?.startsWith("Bearer "))
+      )
     )
       return next(new HttpError(403, "Request origin is not allowed."));
     next();
@@ -130,13 +136,50 @@ export function createApp(options: Options) {
     await session(res, user.id);
     res.json({ user: { id: user.id, name: user.name, email: user.email } });
   });
+  app.post("/api/cli/login", async (req, res) => {
+    await limit("auth:" + req.ip, 20, 900);
+    const data = z
+      .object({
+        email: z
+          .email()
+          .max(254)
+          .transform((v) => v.toLowerCase()),
+        password: z.string().min(1).max(128),
+      })
+      .parse(req.body);
+    const user = (
+      await db.query("SELECT * FROM users WHERE email=$1", [data.email])
+    ).rows[0];
+    const valid = await passwordMatches(
+      data.password,
+      user?.password || "00000000000000000000000000000000:" + "00".repeat(64),
+    );
+    if (!user || !valid)
+      throw new HttpError(401, "Email or password is incorrect.");
+    const raw = token();
+    const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
+    await db.query(
+      "INSERT INTO cli_sessions(hash,user_id,expires_at) VALUES($1,$2,$3)",
+      [hash(raw), user.id, expiresAt],
+    );
+    res.json({
+      token: raw,
+      expiresAt,
+      user: { id: user.id, name: user.name, email: user.email },
+    });
+  });
   app.use("/api", async (req, _res, next) => {
-    const raw = req.cookies.tokenhub_session;
+    const bearer = req.headers.authorization;
+    const raw = bearer
+      ? bearer.replace(/^Bearer /, "")
+      : req.cookies.tokenhub_session;
     if (!raw || typeof raw !== "string")
       throw new HttpError(401, "Sign in to continue.");
+    if (bearer && !/^Bearer [A-Za-z0-9_-]{43}$/.test(bearer))
+      throw new HttpError(401, "Invalid CLI session.");
     const user = (
       await db.query(
-        "SELECT u.id,u.name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.hash=$1 AND s.expires_at>now()",
+        `SELECT u.id,u.name,u.email FROM ${bearer ? "cli_sessions" : "sessions"} s JOIN users u ON u.id=s.user_id WHERE s.hash=$1 AND s.expires_at>now()`,
         [hash(raw)],
       )
     ).rows[0];
@@ -146,7 +189,62 @@ export function createApp(options: Options) {
         "Your session has expired. Please sign in again.",
       );
     req.user = user;
+    if (bearer) {
+      req.cliToken = raw;
+      const allowed =
+        req.method === "GET"
+          ? /^\/(me|cli\/usage|grants|grants\/[\w-]+\/code|offers|conversations|conversations\/[\w-]+\/messages)$/.test(
+              req.path,
+            )
+          : req.method === "POST" &&
+            /^\/(cli\/logout|redeem|offers\/[\w-]+\/request|conversations|conversations\/[\w-]+\/messages)$/.test(
+              req.path,
+            );
+      if (!allowed)
+        throw new HttpError(
+          403,
+          "CLI sessions only allow borrower operations.",
+        );
+    }
     next();
+  });
+  app.post("/api/cli/logout", async (req, res) => {
+    if (!req.cliToken) throw new HttpError(400, "A CLI session is required.");
+    await db.query("DELETE FROM cli_sessions WHERE hash=$1", [
+      hash(req.cliToken),
+    ]);
+    res.json({ ok: true });
+  });
+  app.get("/api/cli/usage", async (req, res) => {
+    const grants = (
+      await db.query(
+        grantSelect + " WHERE g.borrower_id=$1 ORDER BY g.created_at DESC",
+        [req.user.id],
+      )
+    ).rows;
+    const events = (
+      await db.query(
+        "SELECT e.id,e.grant_id,e.conversation_id,e.tokens,e.status,e.created_at FROM usage_events e JOIN grants g ON g.id=e.grant_id WHERE g.borrower_id=$1 ORDER BY e.created_at DESC LIMIT 50",
+        [req.user.id],
+      )
+    ).rows;
+    res.json({
+      grants: grants.map((g) => ({
+        ...g,
+        remaining_tokens: Math.max(0, g.token_limit - g.used_tokens),
+        effective_status:
+          g.status === "active" || g.status === "approved"
+            ? new Date(g.expires_at).getTime() <= Date.now()
+              ? "expired"
+              : g.used_tokens >= g.token_limit
+                ? "exhausted"
+                : g.status
+            : g.status,
+      })),
+      events,
+      limitPolicy: "admission",
+      provider: demo ? "demo" : "codex",
+    });
   });
   app.get("/api/me", async (req, res) => {
     const connected =
