@@ -43,3 +43,4 @@ CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT 
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS grants_borrower ON grants(borrower_id);
 ALTER TABLE connections ADD COLUMN IF NOT EXISTS busy_id UUID; ALTER TABLE connections ADD COLUMN IF NOT EXISTS busy_until TIMESTAMPTZ;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat','agent'));

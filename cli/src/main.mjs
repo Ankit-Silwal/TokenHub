@@ -1,6 +1,8 @@
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { Config, Client, serverUrl, display, printUsage } from "./client.mjs";
+import { runAgent } from "./agent.mjs";
+import { resolve } from "node:path";
 
 const help = `TokenHub — terminal access to your borrowed AI allowance
 
@@ -14,11 +16,14 @@ const help = `TokenHub — terminal access to your borrowed AI allowance
   tokenhub redeem <pass-id|code>  Activate an approved pass
   tokenhub use <pass-id>        Select an active pass
   tokenhub chat [prompt]        Chat; omit prompt for an interactive session
+  tokenhub agent [prompt]       Coding agent with approved local edits/commands
+    --cwd <directory>          Workspace (defaults to current directory)
+    --max-turns <1-30>          Model turns per task (defaults to 12)
   tokenhub sessions            List saved conversations
   tokenhub resume <id>         Continue a conversation
-  tokenhub                     Open the interactive terminal
+  tokenhub                     Open the interactive coding agent
 
-Interactive commands: /help /status /usage /passes /use <id> /new /exit
+Interactive commands: /help /status /usage /passes /use <id> /new /chat /agent /exit
 Node.js 22.12+. Login uses your TokenHub account, not lender credentials.`;
 
 export async function ask(label, secret = false) {
@@ -32,9 +37,11 @@ export async function ask(label, secret = false) {
     },
   });
   const rl = createInterface({ input: process.stdin, output, terminal: true });
-  rl.on("SIGINT", () => rl.close());
+  const controller = new AbortController();
+  rl.on("SIGINT", () => controller.abort());
+  rl.on("close", () => controller.abort());
   try {
-    return await rl.question("");
+    return await rl.question("", { signal: controller.signal });
   } finally {
     rl.close();
     if (secret) process.stdout.write("\n");
@@ -55,17 +62,25 @@ export async function selectedGrant(client, config) {
     );
   return grant;
 }
-export async function sendMessage(client, config, content, signal) {
+export async function sendMessage(
+  client,
+  config,
+  content,
+  signal,
+  mode = "chat",
+) {
   if (!content.trim() || content.length > 12000)
     throw new Error("Messages must contain 1–12,000 characters.");
   await selectedGrant(client, config);
+  if (config.data.conversationMode !== mode) delete config.data.conversationId;
   if (!config.data.conversationId) {
     const conversation = await client.request(
       "/conversations",
-      { grantId: config.data.grantId },
+      { grantId: config.data.grantId, mode },
       { signal },
     );
     config.data.conversationId = conversation.id;
+    config.data.conversationMode = mode;
     await config.save();
   }
   return client.request(
@@ -85,9 +100,15 @@ export async function main(args) {
   }
   const config = await new Config().load();
   const client = new Client(config);
-  const [command = "chat", ...rest] = args;
+  const [command = "agent", ...rest] = args[0]?.startsWith("--")
+    ? ["agent", ...args]
+    : args;
   const take = (key) => {
     const at = rest.indexOf(key);
+    const end = rest.indexOf("--");
+    if (end >= 0 && at > end) return undefined;
+    if (at >= 0 && (!rest[at + 1] || rest[at + 1].startsWith("--")))
+      throw new Error(`Missing value for ${key}.`);
     return at < 0 ? undefined : rest[at + 1];
   };
   const usage = async (json) => {
@@ -222,19 +243,71 @@ export async function main(args) {
     if (!c) throw new Error("Conversation not found. Run tokenhub sessions.");
     await select(c.grant_id);
     config.data.conversationId = c.id;
+    config.data.conversationMode = c.mode || "chat";
     await config.save();
     for (const message of await client.request(
       `/conversations/${c.id}/messages`,
     ))
       console.log(`${message.role}: ${display(message.content)}`);
-  } else if (command !== "chat")
+  } else if (!["chat", "agent"].includes(command))
     throw new Error(`Unknown command: ${command}. Run tokenhub --help.`);
+  let mode = command === "resume" ? config.data.conversationMode : command;
+  const cwd = resolve(take("--cwd") || process.cwd());
+  const maxTurns = Number(take("--max-turns") || 12);
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 30)
+    throw new Error("--max-turns must be between 1 and 30.");
+  const promptParts = [];
+  if (command !== "resume")
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === "--cwd" || rest[i] === "--max-turns") {
+        i++;
+        continue;
+      }
+      if (rest[i] === "--") {
+        promptParts.push(...rest.slice(i + 1));
+        break;
+      }
+      if (rest[i].startsWith("--"))
+        throw new Error(`Unknown option: ${rest[i]}`);
+      promptParts.push(rest[i]);
+    }
   const turn = async (prompt) => {
-    console.error("Thinking…");
     const controller = new AbortController();
     const cancel = () => controller.abort();
     process.once("SIGINT", cancel);
     try {
+      if (mode === "agent") {
+        if (config.data.agentWorkspace && config.data.agentWorkspace !== cwd) {
+          delete config.data.conversationId;
+          console.log("Workspace changed; starting a new agent conversation.");
+        }
+        config.data.agentWorkspace = cwd;
+        await config.save();
+        console.log(
+          `Workspace: ${display(cwd)} | edits and commands require approval`,
+        );
+        await runAgent({
+          client,
+          config,
+          prompt,
+          cwd,
+          maxTurns,
+          signal: controller.signal,
+          sendMessage,
+          checkAccess: () => selectedGrant(client, config),
+          confirm: async (question) =>
+            process.stdin.isTTY &&
+            /^(y|yes)$/i.test((await ask(question)).trim()),
+        });
+        const data = await client.request("/cli/usage");
+        const grant = data.grants.find((g) => g.id === config.data.grantId);
+        if (grant)
+          console.log(
+            `\n${grant.remaining_tokens.toLocaleString()} tokens remaining | ${grant.effective_status}`,
+          );
+        return;
+      }
+      console.error("Thinking…");
       const reply = await sendMessage(
         client,
         config,
@@ -247,15 +320,17 @@ export async function main(args) {
       process.off("SIGINT", cancel);
     }
   };
-  if (command === "chat" && rest.length) {
-    await turn(rest.join(" "));
+  if (promptParts.length) {
+    await turn(promptParts.join(" "));
     return;
   }
   if (!process.stdin.isTTY)
     throw new Error(
-      "Use tokenhub chat <prompt> outside an interactive terminal.",
+      "Use tokenhub chat <prompt> or tokenhub agent <prompt> outside an interactive terminal. Agent mutations are denied without a terminal.",
     );
-  console.log("TokenHub | /help for commands | Ctrl+C to cancel\n");
+  console.log(
+    `TokenHub | ${mode} | /help for commands | Ctrl+C to cancel\nWorkspace: ${display(cwd)}\n`,
+  );
   await usage(false);
   while (true) {
     let prompt;
@@ -271,7 +346,12 @@ export async function main(args) {
       else if (["/status", "/usage", "/passes"].includes(prompt))
         await usage(false);
       else if (prompt.startsWith("/use ")) await select(prompt.slice(5).trim());
-      else if (prompt === "/new") {
+      else if (prompt === "/agent" || prompt === "/chat") {
+        mode = prompt.slice(1);
+        delete config.data.conversationId;
+        await config.save();
+        console.log(`Switched to ${mode}.`);
+      } else if (prompt === "/new") {
         delete config.data.conversationId;
         await config.save();
         console.log("Started a fresh conversation.");

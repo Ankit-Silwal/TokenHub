@@ -11,3 +11,4 @@ playwright-report/
 *.log
 next-env.d.ts
 .next-test/
+*.tgz

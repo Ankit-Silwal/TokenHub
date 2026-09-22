@@ -19,10 +19,12 @@ tokenhub login --server https://your-tokenhub-server.example
 tokenhub passes
 tokenhub redeem <approved-pass-id>
 tokenhub status
-tokenhub chat
+tokenhub
 ```
 
-The CLI uses your TokenHub account and the same pass allowance as the website. Use `http://localhost:3000` for local development. `tokenhub usage --json` exposes usage events and remaining tokens; `tokenhub --help` lists access requests, pass selection, and conversation commands. See [the CLI guide](cli/README.md) for installation, session storage, and packaging. The CLI is installable from GitHub; it is not published on npm yet.
+The CLI uses your TokenHub account and the same pass allowance as the website. Run `tokenhub` inside a project to open the coding agent: it reads files, proposes edits, and runs commands after terminal approval. `tokenhub chat` provides plain chat. Use `http://localhost:3000` for local development. `tokenhub usage --json` exposes usage events and remaining tokens; `tokenhub --help` lists access requests, pass selection, and conversation commands. See [the CLI guide](cli/README.md) for local tool permissions, session storage, and packaging. The CLI is installable from GitHub; it is not published on npm yet.
+
+The existing API serves both web and CLI users; no extra server is required. Restart the backend after upgrading so startup migrations create CLI sessions and conversation modes. The coding agent uses TokenHub's local tool loop, not the native Codex TUI or its complete plugin/MCP feature set. Each planning and tool-result turn passes through the same server usage checks. Automated tests use an injected provider; a real lender connection is needed to verify live model behavior.
 
 ## Start locally
 
@@ -60,7 +62,7 @@ Lenders can see request notes, grant status, and usage. Conversation endpoints o
 
 This app invokes the pinned **Codex CLI 0.155.1**, not the ChatGPT/Responses API. Each lender's login is encrypted using AES-256-GCM in PostgreSQL. A turn uses a temporary, separate CODEX_HOME and an empty working directory. Refreshed credentials are written back encrypted, and temporary files are removed afterward.
 
-The native binary is invoked directly so cancellation terminates Codex itself on Windows as well as Linux/macOS. The process receives an allowlisted environment without the database password, encryption key, or API keys. It ignores user configuration, uses a read-only sandbox, disables shell, browser, image, connector, plugin, multi-agent, and related capabilities, and requests a text answer. Unexpected action events fail closed. No resumable shared Codex thread is exposed: each request receives only that borrower's stored history.
+The native binary is invoked directly so cancellation terminates Codex itself on Windows as well as Linux/macOS. The process receives an allowlisted environment without the database password, encryption key, or API keys. It ignores user configuration, uses a read-only sandbox, and disables shell, browser, image, connector, plugin, multi-agent, and related capabilities. Chat mode requests a text answer; agent mode requests a JSON action proposal that only the borrower's CLI can execute locally. Unexpected native action events fail closed in both modes. No resumable shared Codex thread is exposed: each request receives only that borrower's stored history.
 
 **Token budgets are admission limits, not exact provider-side spending caps.** Codex reports input/output usage after a turn. TokenHub counts full input plus output, including cached input as part of input; the final admitted response may exceed the remaining allowance. All later messages are blocked. No unsupported max-output setting or token estimate is presented as a hard provider limit.
 

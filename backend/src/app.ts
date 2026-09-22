@@ -459,14 +459,19 @@ export function createApp(options: Options) {
     res.json(
       (
         await db.query(
-          "SELECT id,title,grant_id,created_at FROM conversations WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
+          "SELECT id,title,grant_id,mode,created_at FROM conversations WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
           [req.user.id],
         )
       ).rows,
     ),
   );
   app.post("/api/conversations", async (req, res) => {
-    const { grantId } = z.object({ grantId: uuid }).parse(req.body);
+    const { grantId, mode } = z
+      .object({
+        grantId: uuid,
+        mode: z.enum(["chat", "agent"]).default("chat"),
+      })
+      .parse(req.body);
     const grant = requireValue(
       (
         await db.query(
@@ -478,10 +483,12 @@ export function createApp(options: Options) {
     );
     const id = randomUUID();
     await db.query(
-      "INSERT INTO conversations(id,user_id,grant_id,title) VALUES($1,$2,$3,$4)",
-      [id, req.user.id, grant.id, "New conversation"],
+      "INSERT INTO conversations(id,user_id,grant_id,title,mode) VALUES($1,$2,$3,$4,$5)",
+      [id, req.user.id, grant.id, "New conversation", mode],
     );
-    res.status(201).json({ id, title: "New conversation", grant_id: grant.id });
+    res
+      .status(201)
+      .json({ id, title: "New conversation", grant_id: grant.id, mode });
   });
   app.get("/api/conversations/:id/messages", async (req, res) => {
     const id = uuid.parse(req.params.id);
@@ -618,6 +625,7 @@ export function createApp(options: Options) {
               [lenderId, crypto.encrypt(credential), runId],
             );
           },
+          conversation.mode,
         );
         await db.query(
           "UPDATE grants SET used_tokens=used_tokens+$2 WHERE id=$1 AND busy_id=$3",

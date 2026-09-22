@@ -7,6 +7,11 @@ import { createApp } from "../src/app.js";
 import { migrate, type Database } from "../src/db.js";
 import { vault } from "../src/security.js";
 import { cliArgs, safeEnv, type Provider } from "../src/provider.js";
+import { spawn } from "node:child_process";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let db: Database;
 let server: Server;
@@ -16,7 +21,7 @@ let calls = 0;
 let mode: "normal" | "slow" | "fail" = "normal";
 let resolveStarted: () => void = () => {};
 const fake: Provider = {
-  async run(_credential, messages, signal) {
+  async run(_credential, messages, signal, _saveCredential, conversationMode) {
     calls++;
     resolveStarted();
     if (mode === "fail") throw new Error("Provider disconnected");
@@ -32,7 +37,19 @@ const fake: Provider = {
           { once: true },
         );
       });
-    return { text: "Reply: " + messages.at(-1)!.content, tokens: 200 };
+    const text =
+      conversationMode === "agent"
+        ? JSON.stringify(
+            messages.at(-1)!.content.startsWith("Local tool result")
+              ? {
+                  type: "message",
+                  content:
+                    "Inspected local project: " + messages.at(-1)!.content,
+                }
+              : { type: "tool", name: "read", path: "example.txt" },
+          )
+        : "Reply: " + messages.at(-1)!.content;
+    return { text, tokens: 200 };
   },
 };
 let lender: { cookie: string; id: string };
@@ -210,6 +227,103 @@ test("CLI sessions are scoped, account-bound, revocable and share token accounti
   assert.equal((await cli("/cli/logout", {})).status, 200);
   assert.equal((await cli("/me")).status, 401);
 });
+test("installed CLI entrypoint logs in, runs local agent tools, resumes chat and reports usage", async () => {
+  const grant = await active(1000);
+  const home = await mkdtemp(join(tmpdir(), "tokenhub-cli-integration-"));
+  await writeFile(join(home, "example.txt"), "fixture project content");
+  const run = (args: string[]) =>
+    new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          fileURLToPath(new URL("../../cli/bin/tokenhub.mjs", import.meta.url)),
+          ...args,
+        ],
+        {
+          cwd: home,
+          windowsHide: true,
+          env: {
+            ...process.env,
+            TOKENHUB_HOME: join(home, ".tokenhub"),
+            TOKENHUB_PASSWORD: "A-safe-password-123",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let output = "";
+      const timer = setTimeout(() => child.kill(), 15000);
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        output += chunk;
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ code, output });
+      });
+    });
+  try {
+    assert.equal(
+      (
+        await run([
+          "login",
+          "--server",
+          base.replace(/\/api$/, ""),
+          "--email",
+          "borrower@example.com",
+        ])
+      ).code,
+      0,
+    );
+    assert.equal((await run(["use", grant.grantId])).code, 0);
+    const agent = await run(["agent", "Inspect my project"]);
+    assert.equal(agent.code, 0, agent.output);
+    assert.match(agent.output, /fixture project content/);
+    let usage = JSON.parse((await run(["usage", "--json"])).output);
+    assert.equal(
+      usage.grants.find((g: any) => g.id === grant.grantId).used_tokens,
+      400,
+    );
+    const state = JSON.parse(
+      await readFile(join(home, ".tokenhub", "config.json"), "utf8"),
+    );
+    assert.equal(state.conversationMode, "agent");
+    assert.equal(
+      (
+        await db.query("SELECT mode FROM conversations WHERE id=$1", [
+          state.conversationId,
+        ])
+      ).rows[0].mode,
+      "agent",
+    );
+    assert.equal((await run(["chat", "Hello"])).code, 0);
+    const chatState = JSON.parse(
+      await readFile(join(home, ".tokenhub", "config.json"), "utf8"),
+    );
+    assert.notEqual(chatState.conversationId, state.conversationId);
+    assert.equal((await run(["chat", "Follow up"])).code, 0);
+    assert.equal(
+      JSON.parse(await readFile(join(home, ".tokenhub", "config.json"), "utf8"))
+        .conversationId,
+      chatState.conversationId,
+    );
+    usage = JSON.parse((await run(["status", "--json"])).output);
+    assert.equal(
+      usage.grants.find((g: any) => g.id === grant.grantId).used_tokens,
+      800,
+    );
+    assert.equal((await run(["logout"])).code, 0);
+    assert.equal((await run(["status"])).code, 1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("authentication rejects wrong credentials and cross-origin writes", async () => {
   assert.equal((await request("", "/me")).status, 401);
   assert.equal(

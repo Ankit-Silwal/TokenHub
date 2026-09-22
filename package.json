@@ -2,6 +2,9 @@
   "name": "tokenhub",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
   "bin": {
     "tokenhub": "cli/bin/tokenhub.mjs"
   },

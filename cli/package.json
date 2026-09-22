@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "check": "node --check bin/tokenhub.mjs && node --check src/client.mjs && node --check src/main.mjs",
+    "check": "node --check bin/tokenhub.mjs && node --check src/client.mjs && node --check src/main.mjs && node --check src/agent.mjs",
     "test": "node --test tests/*.test.mjs"
   }
 }
