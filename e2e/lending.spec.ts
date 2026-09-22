@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 async function register(page: Page, name: string, email: string) {
   await page.goto("/");
   await page.getByRole("button", { name: "Become a lender" }).click();
@@ -21,111 +22,130 @@ test("lender approves, borrower redeems, chats, reloads history and loses access
   const borrowerContext = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
   });
-  const lender = await lenderContext.newPage(),
-    borrower = await borrowerContext.newPage();
-  const stamp = Date.now();
-  const errors: string[] = [];
-  lender.on("pageerror", (e) => errors.push(e.message));
-  borrower.on("pageerror", (e) => errors.push(e.message));
-  await register(lender, "Alex Lender", "lender-" + stamp + "@example.com");
-  await lender.getByRole("button", { name: "My lending" }).click();
-  await lender.getByRole("button", { name: "Connect Codex" }).click();
-  await lender.getByRole("button", { name: "Done", exact: true }).click();
-  await lender
-    .getByRole("button", { name: "Create offer", exact: true })
-    .click();
-  const form = lender.getByRole("dialog");
-  await form.getByLabel("Offer title").fill("A little TypeScript help");
-  await form
-    .getByLabel("What can you help with?")
-    .fill("Build a project, learn TypeScript, or untangle a tricky bug.");
-  await form.getByLabel("Tokens per pass").fill("50000");
-  await form.getByLabel("Access duration (minutes)").fill("60");
-  await form.getByLabel("Available until").fill("2026-10-01T18:00");
-  // Use a relative date, so this remains valid after the initial development session.
-  const tomorrow = new Date(Date.now() + 86400000);
-  await form
-    .getByLabel("Available until")
-    .fill(
-      new Date(tomorrow.getTime() - tomorrow.getTimezoneOffset() * 60000)
+  try {
+    const lender = await lenderContext.newPage(),
+      borrower = await borrowerContext.newPage();
+    const stamp = randomUUID();
+    const offerTitle = "TypeScript help " + stamp;
+    const errors: string[] = [];
+    lender.on("pageerror", (e) => errors.push(e.message));
+    borrower.on("pageerror", (e) => errors.push(e.message));
+    await register(lender, "Alex Lender", "lender-" + stamp + "@example.com");
+    await lender.getByRole("button", { name: "My lending" }).click();
+    await lender.getByRole("button", { name: "Connect Codex" }).click();
+    await lender.getByRole("button", { name: "Done", exact: true }).click();
+    await lender
+      .getByRole("button", { name: "Create offer", exact: true })
+      .click();
+    const form = lender.getByRole("dialog");
+    await form.getByLabel("Offer title").fill(offerTitle);
+    await form
+      .getByLabel("What can you help with?")
+      .fill("Build a project, learn TypeScript, or untangle a tricky bug.");
+    await form.getByLabel("Tokens per pass").fill("50000");
+    await form.getByLabel("Access duration (minutes)").fill("60");
+    // datetime-local uses the browser's timezone, which may differ from the runner.
+    const availableUntil = await lender.evaluate(() => {
+      const tomorrow = new Date(Date.now() + 86400000);
+      return new Date(tomorrow.getTime() - tomorrow.getTimezoneOffset() * 60000)
         .toISOString()
-        .slice(0, 16),
+        .slice(0, 16);
+    });
+    await form.getByLabel("Available until").fill(availableUntil);
+    await form.getByRole("button", { name: "Publish offer" }).click();
+    await expect(form).toBeHidden();
+    await register(
+      borrower,
+      "Sam Builder",
+      "borrower-" + stamp + "@example.com",
     );
-  await form.getByRole("button", { name: "Publish offer" }).click();
-  await expect(form).toBeHidden();
-  await register(borrower, "Sam Builder", "borrower-" + stamp + "@example.com");
-  await borrower.getByRole("button", { name: "Explore access" }).click();
-  await borrower
-    .getByRole("button", { name: "Request access", exact: true })
-    .click();
-  await borrower
-    .getByLabel("What are you working on?")
-    .fill("I want to learn TypeScript and build a small app.");
-  await borrower
-    .getByRole("button", { name: "Send request", exact: true })
-    .click();
-  await expect(borrower.getByRole("dialog")).toBeHidden();
-  await lender.reload();
-  await lender.getByRole("button", { name: "My lending" }).click();
-  await lender.getByRole("button", { name: "Approve", exact: true }).click();
-  await lender.getByRole("button", { name: "Approve & issue code" }).click();
-  await expect(lender.getByRole("dialog")).toBeHidden();
-  await mkdir(".runtime/screenshots", { recursive: true });
-  await lender.screenshot({
-    path: ".runtime/screenshots/lending-desktop.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await borrower.reload();
-  await borrower
-    .getByRole("button", { name: "My access", exact: true })
-    .click();
-  await borrower.getByRole("button", { name: "View access code" }).click();
-  await expect(borrower.getByLabel("Access code")).toHaveValue(/^TH-/);
-  await borrower.getByRole("button", { name: "Activate access" }).click();
-  await expect(borrower.getByRole("dialog")).toBeHidden();
-  await borrower.getByRole("button", { name: "Start a conversation" }).click();
-  await borrower
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Write a TypeScript greeting function.");
-  await borrower.getByRole("button", { name: "Send message" }).click();
-  await expect(
-    borrower.getByText("Demo response", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    borrower.getByRole("button", { name: "Copy code" }),
-  ).toBeVisible();
-  await borrower.screenshot({
-    path: ".runtime/screenshots/chat-desktop.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await borrower.reload();
-  await borrower
-    .getByRole("button", {
-      name: "Write a TypeScript greeting function.",
-      exact: true,
-    })
-    .click();
-  await expect(
-    borrower.getByText("Demo response", { exact: true }),
-  ).toBeVisible();
-  await lender.getByRole("button", { name: "Revoke access" }).click();
-  await expect(
-    lender.getByText("Access revoked.", { exact: true }),
-  ).toBeVisible();
-  await borrower
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("One more question");
-  await borrower.getByRole("button", { name: "Send message" }).click();
-  await expect(
-    borrower
-      .getByRole("alert")
-      .filter({ hasText: /expired|revoked|Activate an access/ }),
-  ).toContainText(/expired|revoked|Activate an access/);
-  expect(errors).toEqual([]);
-  await lenderContext.close();
-  await borrowerContext.close();
+    await borrower.getByRole("button", { name: "Explore access" }).click();
+    // Offers from other tests/retries can remain in the shared test database.
+    const borrowerOffer = borrower.locator(".offer-card").filter({
+      has: borrower.getByRole("heading", { name: offerTitle, exact: true }),
+    });
+    await borrowerOffer
+      .getByRole("button", { name: "Request access", exact: true })
+      .click();
+    await borrower
+      .getByLabel("What are you working on?")
+      .fill("I want to learn TypeScript and build a small app.");
+    await borrower
+      .getByRole("button", { name: "Send request", exact: true })
+      .click();
+    await expect(borrower.getByRole("dialog")).toBeHidden();
+    await lender.reload();
+    await lender.getByRole("button", { name: "My lending" }).click();
+    const request = lender.locator(".request-row").filter({
+      has: lender.getByText(offerTitle, { exact: true }),
+    });
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await lender
+      .getByRole("dialog")
+      .getByRole("button", { name: "Approve & issue code" })
+      .click();
+    await expect(lender.getByRole("dialog")).toBeHidden();
+    await mkdir(".runtime/screenshots", { recursive: true });
+    await lender.screenshot({
+      path: ".runtime/screenshots/lending-desktop.png",
+      fullPage: true,
+      animations: "disabled",
+    });
+    await borrower.reload();
+    await borrower
+      .getByRole("button", { name: "My access", exact: true })
+      .click();
+    await borrowerOffer
+      .getByRole("button", { name: "View access code" })
+      .click();
+    await expect(borrower.getByLabel("Access code")).toHaveValue(/^TH-/);
+    await borrower.getByRole("button", { name: "Activate access" }).click();
+    await expect(borrower.getByRole("dialog")).toBeHidden();
+    await borrowerOffer
+      .getByRole("button", { name: "Start a conversation" })
+      .click();
+    await borrower
+      .getByRole("textbox", { name: "Message", exact: true })
+      .fill("Write a TypeScript greeting function.");
+    await borrower.getByRole("button", { name: "Send message" }).click();
+    await expect(
+      borrower.getByText("Demo response", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      borrower.getByRole("button", { name: "Copy code" }),
+    ).toBeVisible();
+    await borrower.screenshot({
+      path: ".runtime/screenshots/chat-desktop.png",
+      fullPage: true,
+      animations: "disabled",
+    });
+    await borrower.reload();
+    await borrower
+      .getByRole("button", {
+        name: "Write a TypeScript greeting function.",
+        exact: true,
+      })
+      .click();
+    await expect(
+      borrower.getByText("Demo response", { exact: true }),
+    ).toBeVisible();
+    await request.getByRole("button", { name: "Revoke access" }).click();
+    await expect(
+      lender.getByText("Access revoked.", { exact: true }),
+    ).toBeVisible();
+    await borrower
+      .getByRole("textbox", { name: "Message", exact: true })
+      .fill("One more question");
+    await borrower.getByRole("button", { name: "Send message" }).click();
+    await expect(
+      borrower
+        .getByRole("alert")
+        .filter({ hasText: /expired|revoked|Activate an access/ }),
+    ).toContainText(/expired|revoked|Activate an access/);
+    expect(errors).toEqual([]);
+  } finally {
+    await Promise.all([lenderContext.close(), borrowerContext.close()]);
+  }
 });
 test("landing page works on desktop and mobile without horizontal overflow", async ({
   page,
@@ -173,7 +193,7 @@ test("device sign-in can be cancelled and retried after a server restart", async
   await register(
     page,
     "Device Tester",
-    "device-" + Date.now() + "@example.test",
+    "device-" + randomUUID() + "@example.test",
   );
   await page.getByRole("button", { name: "My lending" }).click();
   let loginState = "pending";
